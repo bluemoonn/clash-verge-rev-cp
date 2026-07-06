@@ -1,9 +1,17 @@
 name: Release Build
 
 on:
-  # ! 为了避免重复发布版本，应当通过独特 git tag 触发。
-  # ! 不再使用 workflow_dispatch 触发。
-  # workflow_dispatch:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v2.4.3 or v2.4.3-rc)'
+        required: true
+        type: string
+      draft:
+        description: 'Create as draft release'
+        required: false
+        type: boolean
+        default: true
   push:
     # -rc tag 时预览发布, 跳过 telegram 通知、跳过 winget 提交、跳过 latest.json 文件更新
     tags:
@@ -28,7 +36,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set tag variable
+        id: set_tag
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "TAG_REF=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "IS_MANUAL=true" >> $GITHUB_OUTPUT
+          else
+            echo "TAG_REF=${GITHUB_REF##*/}" >> $GITHUB_OUTPUT
+            echo "IS_MANUAL=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Check if tag is from main branch
+        if: github.event_name != 'workflow_dispatch'
         run: |
           TAG_REF="${GITHUB_REF##*/}"
           echo "Checking if tag $TAG_REF is from main branch..."
@@ -46,8 +66,13 @@ jobs:
 
       - name: Check tag and package.json version
         run: |
-          TAG_REF="${GITHUB_REF_NAME:-${GITHUB_REF##*/}}"
-          echo "Current tag: $TAG_REF"
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            TAG_REF="${{ github.event.inputs.tag }}"
+            echo "Manual workflow dispatch with tag: $TAG_REF"
+          else
+            TAG_REF="${GITHUB_REF_NAME:-${GITHUB_REF##*/}}"
+            echo "Automatic tag trigger: $TAG_REF"
+          fi
 
           PKG_VERSION=$(jq -r .version package.json)
           echo "package.json version: $PKG_VERSION"
@@ -62,11 +87,14 @@ jobs:
           fi
 
           echo "✅ Tag and package.json version are consistent."
+    outputs:
+      tag: ${{ steps.set_tag.outputs.TAG_REF }}
+      is_manual: ${{ steps.set_tag.outputs.IS_MANUAL }}
 
   update_tag:
     name: Update tag
     runs-on: ubuntu-latest
-    needs: [release, release-for-linux-arm, release-for-fixed-webview2]
+    needs: [check_tag_version, release, release-for-linux-arm, release-for-fixed-webview2]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -79,7 +107,7 @@ jobs:
       - name: Set Env
         run: |
           echo "BUILDTIME=$(TZ=Asia/Shanghai date)" >> $GITHUB_ENV
-          TAG_REF="${GITHUB_REF##*/}"
+          TAG_REF="${{ needs.check_tag_version.outputs.tag }}"
           echo "TAG_NAME=$TAG_REF" >> $GITHUB_ENV
           VERSION=$(echo "$TAG_REF" | sed 's/^v//')
           echo "VERSION=$VERSION" >> $GITHUB_ENV
@@ -128,7 +156,7 @@ jobs:
       - name: Publish Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PRERELEASE: ${{ contains(github.ref_name, '-rc') }}
+          PRERELEASE: ${{ contains(needs.check_tag_version.outputs.tag, '-rc') }}
         run: |
           matches=$(gh api repos/{owner}/{repo}/releases --paginate --jq '.[] | select(.tag_name == env.TAG_NAME) | [.id, .draft, (.assets | length), .html_url] | @tsv')
           release_count=$(grep -c . <<< "$matches" || true)
@@ -167,7 +195,7 @@ jobs:
             target: aarch64-pc-windows-msvc
           - os: macos-latest
             target: aarch64-apple-darwin
-          - os: macos-latest
+          - os: macos-13
             target: x86_64-apple-darwin
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
@@ -206,7 +234,7 @@ jobs:
       - name: Install x86 OpenSSL (macOS only)
         if: matrix.target == 'x86_64-apple-darwin'
         run: |
-          arch -x86_64 brew install openssl@3
+          brew install openssl@3
           echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> $GITHUB_ENV
           echo "OPENSSL_INCLUDE_DIR=$(brew --prefix openssl@3)/include" >> $GITHUB_ENV
           echo "OPENSSL_LIB_DIR=$(brew --prefix openssl@3)/lib" >> $GITHUB_ENV
@@ -242,21 +270,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Clash Verge Rev ${{ github.ref_name }}'
+          tagName: ${{ needs.check_tag_version.outputs.tag }}
+          releaseName: 'Clash Verge Rev ${{ needs.check_tag_version.outputs.tag }}'
           releaseBody: 'Draft release, will be updated later.'
-          releaseDraft: true
-          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          releaseDraft: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.draft == 'true' }}
+          prerelease: ${{ contains(needs.check_tag_version.outputs.tag, '-rc') }}
           tauriScript: pnpm
           args: --target ${{ matrix.target }}
-          includeUpdaterJson: true
+          includeUpdaterJson: false
 
       - name: Attest Windows bundles
         if: matrix.os == 'windows-latest'
@@ -420,7 +442,7 @@ jobs:
           body: 'See release notes for detailed changelog.'
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: true
-          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          prerelease: ${{ contains(needs.check_tag_version.outputs.tag, '-rc') }}
           files: |
             target/${{ matrix.target }}/release/bundle/deb/*.deb
             target/${{ matrix.target }}/release/bundle/rpm/*.rpm
@@ -537,7 +559,7 @@ jobs:
           body: 'See release notes for detailed changelog.'
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: true
-          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          prerelease: ${{ contains(needs.check_tag_version.outputs.tag, '-rc') }}
           files: target/${{ matrix.target }}/release/bundle/nsis/*setup*
 
       - name: Portable Bundle
@@ -546,10 +568,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release-update:
-    if: ${{ !contains(github.ref_name, '-rc') }}
+    if: ${{ !contains(needs.check_tag_version.outputs.tag, '-rc') }}
     name: Release Update
     runs-on: ubuntu-latest
-    needs: [update_tag]
+    needs: [check_tag_version, update_tag]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -573,9 +595,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release-update-for-fixed-webview2:
-    if: ${{ !contains(github.ref_name, '-rc') }}
+    if: ${{ !contains(needs.check_tag_version.outputs.tag, '-rc') }}
     runs-on: ubuntu-latest
-    needs: [update_tag]
+    needs: [check_tag_version, update_tag]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -599,10 +621,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   submit-to-winget:
-    if: ${{ !contains(github.ref_name, '-rc') }}
+    if: ${{ !contains(needs.check_tag_version.outputs.tag, '-rc') }}
     name: Submit to Winget
     runs-on: ubuntu-latest
-    needs: [update_tag, release-update]
+    needs: [check_tag_version, update_tag, release-update]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -623,11 +645,12 @@ jobs:
           token: ${{ secrets.WINGET_TOKEN  }}
 
   notify-telegram:
-    if: ${{ !contains(github.ref_name, '-rc') }}
+    if: ${{ !contains(needs.check_tag_version.outputs.tag, '-rc') }}
     name: Notify Telegram
     runs-on: ubuntu-latest
     needs:
       [
+        check_tag_version,
         update_tag,
         release-update,
         release-update-for-fixed-webview2,
