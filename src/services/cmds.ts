@@ -1,4 +1,4 @@
-import { Channel } from '@tauri-apps/api/core'
+import type { Channel } from '@tauri-apps/api/core'
 import dayjs from 'dayjs'
 
 import { showNotice } from '@/services/notice-service'
@@ -6,7 +6,6 @@ import { debugLog } from '@/utils/debug'
 
 import { commands } from './bindings'
 import type {
-  DownloadEvent,
   JsonValue,
   ListenerProbe,
   ProxyPortSettings,
@@ -289,19 +288,6 @@ export async function upgradeClashCore(force = false) {
 
 export async function restartApp() {
   return commands.restartApp()
-}
-
-export async function installUpdate(
-  version: string,
-  onEvent: (event: DownloadEvent) => void,
-) {
-  const channel = new Channel<DownloadEvent>()
-  channel.onmessage = onEvent
-  return commands.installUpdate(version, channel)
-}
-
-export async function cancelUpdateDownload() {
-  return commands.cancelUpdateDownload()
 }
 
 export async function getAppDir() {

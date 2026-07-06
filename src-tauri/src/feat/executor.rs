@@ -7,7 +7,7 @@ use crate::{
     },
     core::auto_backup::AutoBackupManager,
     core::{
-        CoreManager, SilentUpdater, autostart, hotkey, lightweight, logger, manager::ConfigUpdateGuard, proxy_control,
+        CoreManager, autostart, hotkey, lightweight, logger, manager::ConfigUpdateGuard, proxy_control,
         tray,
     },
 };
@@ -162,10 +162,7 @@ pub(super) async fn apply(config_write: &MutexGuard<'_, ()>, patch: Patch<'_>, e
     }
     transaction.commit();
     match patch {
-        Patch::Verge { patch, .. } => {
-            if patch.auto_check_update == Some(false) {
-                SilentUpdater::global().discard_pending();
-            }
+        Patch::Verge { .. } => {
             if effects.contains(&Effect::ClashConfig) {
                 announce(Refresh::Clash);
             }

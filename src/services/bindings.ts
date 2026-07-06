@@ -23,9 +23,6 @@ export const commands = {
     __TAURI_INVOKE<string[]>('get_network_interfaces'),
   getSystemHostname: () => __TAURI_INVOKE<string>('get_system_hostname'),
   restartApp: () => __TAURI_INVOKE<null>('restart_app'),
-  installUpdate: (version: string, onEvent: Channel<DownloadEvent>) =>
-    __TAURI_INVOKE<boolean>('install_update', { version, onEvent }),
-  cancelUpdateDownload: () => __TAURI_INVOKE<void>('cancel_update_download'),
   restartCore: () => __TAURI_INVOKE<null>('restart_core'),
   /**  Replaces the managed core binary atomically instead of letting mihomo overwrite itself. */
   upgradeClashCore: (force: boolean) =>
@@ -288,22 +285,6 @@ export type DelayHistory = {
 export type DnsOverrideOutcome =
   | { status: 'applied' }
   | { status: 'confirmation_required'; source: string }
-
-/**  Same wire shape as the updater plugin's JS `DownloadEvent`. */
-export type DownloadEvent =
-  | {
-      event: 'Started'
-      data: {
-        contentLength: number | null
-      }
-    }
-  | {
-      event: 'Progress'
-      data: {
-        chunkLength: number
-      }
-    }
-  | { event: 'Finished' }
 
 /**  Operation associated with a pending failure. */
 export type FailedOperation =

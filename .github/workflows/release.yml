@@ -1,9 +1,12 @@
 name: Release Build
 
 on:
-  pull_request:
-    types: [edited]
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v2.5.10 or v2.5.10-rc); the tag must already exist'
+        required: true
+        type: string
   push:
     # -rc tag 时预览发布, 跳过 telegram 通知、跳过 winget 提交、跳过 latest.json 文件更新
     tags:
@@ -20,13 +23,6 @@ concurrency:
 jobs:
   prepare_release:
     name: Approve Snapshot and Prepare Draft Release
-    if: >-
-      ${{ github.event_name == 'push' ||
-          (github.event.changes.body &&
-           github.event.pull_request.head.repo.full_name == github.repository &&
-           github.event.pull_request.user.login == 'github-actions[bot]' &&
-           startsWith(github.event.pull_request.head.ref, 'publish/v') &&
-           contains(github.event.pull_request.body, '[x] Publish this approved release')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -39,19 +35,41 @@ jobs:
       channel: ${{ steps.source.outputs.channel }}
       release_id: ${{ steps.draft.outputs.id }}
     steps:
-      - name: Checkout trusted release tooling
+      - name: Checkout release tag
         uses: actions/checkout@v7
         with:
-          ref: refs/heads/dev
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: '26.13.0'
-      - name: Validate source and publish the approved snapshot
+      - name: Validate tag and version files
         id: source
         env:
-          RELEASE_COMMAND: ${{ github.event_name == 'push' && 'validate-tag' || 'publish' }}
-        run: node scripts-workflow/release.mjs "$RELEASE_COMMAND"
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc(\.[0-9]+)?)?$ ]]; then
+            echo "::error::Expected a stable or RC release tag, got '$RELEASE_TAG'."
+            exit 1
+          fi
+          VERSION="${RELEASE_TAG#v}"
+          check() {
+            if [ "$2" != "$VERSION" ]; then
+              echo "::error::$1 version ($2) does not match $RELEASE_TAG."
+              exit 1
+            fi
+          }
+          check package.json "$(jq -r .version package.json)"
+          check src-tauri/tauri.conf.json "$(jq -r .version src-tauri/tauri.conf.json)"
+          check src-tauri/Cargo.toml "$(sed -n 's/^version *= *"\(.*\)"/\1/p' src-tauri/Cargo.toml | head -1)"
+          echo "✅ Tag and version files are consistent."
+          if [[ "$RELEASE_TAG" == *-rc* ]]; then CHANNEL=rc; else CHANNEL=stable; fi
+          {
+            echo "release_tag=$RELEASE_TAG"
+            echo "source_sha=$(git rev-parse HEAD)"
+            echo "channel=$CHANNEL"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create or reuse draft release
         id: draft
@@ -96,7 +114,7 @@ jobs:
           echo "TAG_NAME=$TAG_REF" >> $GITHUB_ENV
           VERSION=$(echo "$TAG_REF" | sed 's/^v//')
           echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "DOWNLOAD_URL=https://github.com/clash-verge-rev/clash-verge-rev/releases/download/$TAG_REF" >> $GITHUB_ENV
+          echo "DOWNLOAD_URL=https://github.com/${{ github.repository }}/releases/download/$TAG_REF" >> $GITHUB_ENV
         shell: bash
 
       - run: |
@@ -254,12 +272,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           releaseId: ${{ needs.prepare_release.outputs.release_id }}
           tagName: ${{ env.RELEASE_TAG }}
@@ -269,7 +281,7 @@ jobs:
           releaseCommitish: ${{ needs.prepare_release.outputs.source_sha }}
           tauriScript: pnpm
           args: --target ${{ matrix.target }}
-          uploadUpdaterJson: ${{ needs.prepare_release.outputs.channel == 'stable' }}
+          uploadUpdaterJson: false
 
       - name: Attest Windows bundles
         if: matrix.os == 'windows-latest'
@@ -546,7 +558,7 @@ jobs:
 
   prepare-next-dev:
     name: Prepare Next Dev Version
-    if: ${{ needs.update_tag.outputs.channel == 'stable' }}
+    if: ${{ github.repository == 'clash-verge-rev/clash-verge-rev' && needs.update_tag.outputs.channel == 'stable' }}
     needs: [prepare_release, update_tag]
     runs-on: ubuntu-latest
     permissions:
@@ -576,7 +588,7 @@ jobs:
           node scripts-workflow/release.mjs next-dev
 
   release-update:
-    if: ${{ needs.update_tag.outputs.channel == 'stable' }}
+    if: ${{ github.repository == 'clash-verge-rev/clash-verge-rev' && needs.update_tag.outputs.channel == 'stable' }}
     name: Release Update
     runs-on: ubuntu-latest
     needs: [update_tag]
@@ -605,7 +617,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release-update-for-fixed-webview2:
-    if: ${{ needs.update_tag.outputs.channel == 'stable' }}
+    if: ${{ github.repository == 'clash-verge-rev/clash-verge-rev' && needs.update_tag.outputs.channel == 'stable' }}
     runs-on: ubuntu-latest
     needs: [update_tag]
     steps:
@@ -633,7 +645,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   submit-to-winget:
-    if: ${{ needs.update_tag.outputs.channel == 'stable' }}
+    if: ${{ github.repository == 'clash-verge-rev/clash-verge-rev' && needs.update_tag.outputs.channel == 'stable' }}
     name: Submit to Winget
     runs-on: ubuntu-latest
     needs: [update_tag, release-update]
@@ -658,7 +670,7 @@ jobs:
           token: ${{ secrets.WINGET_TOKEN  }}
 
   notify-telegram:
-    if: ${{ needs.update_tag.outputs.channel == 'stable' }}
+    if: ${{ github.repository == 'clash-verge-rev/clash-verge-rev' && needs.update_tag.outputs.channel == 'stable' }}
     name: Notify Telegram
     runs-on: ubuntu-latest
     needs:
