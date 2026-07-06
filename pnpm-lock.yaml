@@ -81,8 +81,8 @@ importers:
         specifier: ^26.2.0
         version: 26.3.4(typescript@6.0.3)
       js-yaml:
-        specifier: ^4.1.1
-        version: 4.3.0
+        specifier: ^5.0.0
+        version: 5.2.1
       lodash-es:
         specifier: ^4.18.1
         version: 4.18.1
@@ -2659,6 +2659,10 @@ packages:
 
   js-yaml@4.3.0:
     resolution: {integrity: sha512-1td788aAnnZ5qs7V2QIRl1owjtYpbKt749Y3xauqQgwIIGF/xXWz1wMTEBx5O3LK3lXLVuqXPdPxj2BoFHaW9Q==}
+    hasBin: true
+
+  js-yaml@5.2.1:
+    resolution: {integrity: sha512-zfLtNfQqxVqq3uaTqSkh4x4hZw3KHobGUA0fJUj4wawW8bsQLTVqpHdXSIzidh7o+4lEW36tANuAGdaFx6Zgnw==}
     hasBin: true
 
   jsesc@3.1.0:
@@ -6255,6 +6259,10 @@ snapshots:
   js-tokens@4.0.0: {}
 
   js-yaml@4.3.0:
+    dependencies:
+      argparse: 2.0.1
+
+  js-yaml@5.2.1:
     dependencies:
       argparse: 2.0.1
 
